@@ -7,8 +7,8 @@
   vars_prompt:
     - name: new_user_password
       prompt: New user password
-      private: yes
-      confirm: yes
+      private: true
+      confirm: true
   handlers:
     - name: Reload ssh
       ansible.builtin.service:
