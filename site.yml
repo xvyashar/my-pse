@@ -1,0 +1,115 @@
+---
+- name: Bootstrap PSE
+  hosts: pse
+  become: true
+  vars_prompt:
+    - name: new_user
+      prompt: New username
+      default: pse
+      private: no
+    - name: new_user_password
+      prompt: New user password
+      private: yes
+      confirm: yes
+  handlers:
+    - name: Reload ssh
+      ansible.builtin.service:
+        name: ssh
+        state: reloaded
+  tasks:
+    - name: Update apt and upgrade installed packages
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        autoremove: true
+        cache_valid_time: 3600
+
+    - name: Install ufw and fail2ban
+      ansible.builtin.apt:
+        name:
+          - ufw
+          - fail2ban
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create sudo user
+      ansible.builtin.user:
+        name: "{{ new_user }}"
+        password: "{{ new_user_password | password_hash('sha512') }}"
+        groups: sudo
+        append: true
+        shell: /bin/bash
+        create_home: true
+      no_log: true
+
+    - name: Remember the new user for the next play
+      ansible.builtin.set_fact:
+        pse_user: "{{ new_user }}"
+
+    - name: Ensure .ssh directory exists
+      ansible.builtin.file:
+        path: "/home/{{ new_user }}/.ssh"
+        state: directory
+        owner: "{{ new_user }}"
+        group: "{{ new_user }}"
+        mode: "0700"
+
+    - name: Install control node public key for the new user
+      ansible.builtin.blockinfile:
+        path: "/home/{{ new_user }}/.ssh/authorized_keys"
+        create: true
+        owner: "{{ new_user }}"
+        group: "{{ new_user }}"
+        mode: "0600"
+        marker: "# {mark} ANSIBLE MANAGED PSE KEY"
+        block: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub') }}"
+      no_log: true
+
+    - name: Passwordless sudo for the automation user
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/pse-automation
+        content: "{{ new_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s
+      no_log: true
+
+    - name: Allow SSH through the firewall
+      ansible.builtin.command: "ufw allow {{ ansible_port }}/tcp"
+      register: ufw_allow
+      changed_when: "'Rule added' in ufw_allow.stdout"
+
+    - name: Enable ufw
+      ansible.builtin.command: ufw --force enable
+      register: ufw_enable
+      changed_when: "'Firewall is active and enabled' in ufw_enable.stdout"
+
+    - name: Start and enable fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: started
+        enabled: true
+
+    - name: Disable root login and password authentication
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^[#\\s]*{{ item.directive }}\\s+\\S+"
+        line: "{{ item.directive }} {{ item.value }}"
+        validate: /usr/sbin/sshd -t -f %s
+      loop:
+        - { directive: PermitRootLogin, value: "no" }
+        - { directive: PasswordAuthentication, value: "no" }
+      notify: Reload ssh
+
+- name: Manage PSE
+  hosts: pse
+  become: true
+  gather_facts: false
+  vars:
+    ansible_user: "{{ pse_user }}"
+  tasks:
+    - name: Prove key login and sudo both work
+      ansible.builtin.command: whoami
+      changed_when: false
