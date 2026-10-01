@@ -15,4 +15,5 @@ $ ansible-playbook site.yml -i inventory.ini -i secrets.ini --skip-tags bootstra
 ```
 
 ## Plays
-- **Bootstrap**: init vps server by creating a sudo user, updating and upgrading packages, installing ufw firewall and fail2ban, enabling ssh key login on control node (usually your desktop), and finally disabling root login
+- **Bootstrap**: Init vps server by creating a sudo user, updating and upgrading packages, installing ufw firewall and fail2ban, enabling ssh key login on control node (usually your desktop), and finally disabling root login
+- **Docker Install**: Install docker engine

@@ -92,13 +92,23 @@
         - { directive: PasswordAuthentication, value: "no" }
       notify: Reload ssh
 
-- name: Install Docker Engine
+- name: Docker Install
   hosts: pse
   become: true
-  gather_facts: false
+  gather_facts: true
   vars:
     ansible_user: "{{ pse_user }}"
   tasks:
+    - name: Assert a supported distribution
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution | lower in ['debian', 'ubuntu']
+          - ansible_distribution_release | length > 0
+        fail_msg: >-
+          Docker install is not supported for {{ ansible_distribution }}
+          (release '{{ ansible_distribution_release }}').
+          Supported: debian, ubuntu.
+
     - name: Check whether Docker CE is already installed
       ansible.builtin.command: dpkg -s docker-ce
       register: docker_ce
@@ -134,7 +144,7 @@
 
     - name: Fetch Docker official GPG key
       ansible.builtin.get_url:
-        url: https://download.docker.com/linux/debian/gpg
+        url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
         dest: /etc/apt/keyrings/docker.asc
         mode: "0644"
 
@@ -149,8 +159,8 @@
         mode: "0644"
         content: |
           Types: deb
-          URIs: https://download.docker.com/linux/debian
-          Suites: trixie
+          URIs: https://download.docker.com/linux/{{ ansible_distribution | lower }}
+          Suites: {{ ansible_distribution_release }}
           Components: stable
           Architectures: {{ arch.stdout }}
           Signed-By: /etc/apt/keyrings/docker.asc
