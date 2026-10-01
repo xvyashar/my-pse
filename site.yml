@@ -4,11 +4,6 @@
   become: true
   tags:
     - bootstrap
-  vars_prompt:
-    - name: new_user_password
-      prompt: New user password
-      private: true
-      confirm: true
   handlers:
     - name: Reload ssh
       ansible.builtin.service:
@@ -34,7 +29,7 @@
     - name: Create sudo user
       ansible.builtin.user:
         name: "{{ pse_user }}"
-        password: "{{ new_user_password | password_hash('sha512') }}"
+        password: "{{ pse_password | password_hash('sha512') }}"
         groups: sudo
         append: true
         shell: /bin/bash
