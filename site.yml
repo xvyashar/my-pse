@@ -97,13 +97,133 @@
         - { directive: PasswordAuthentication, value: "no" }
       notify: Reload ssh
 
-- name: Manage
+- name: Install Docker Engine
   hosts: pse
   become: true
   gather_facts: false
   vars:
     ansible_user: "{{ pse_user }}"
   tasks:
-    - name: Prove key login and sudo both work
-      ansible.builtin.command: whoami
+    - name: Check whether Docker CE is already installed
+      ansible.builtin.command: dpkg -s docker-ce
+      register: docker_ce
       changed_when: false
+      failed_when: false
+
+    - name: Remove conflicting packages
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-compose
+          - docker-doc
+          - docker-buildx
+          - podman-docker
+          - containerd
+          - runc
+        state: absent
+      when: docker_ce.rc != 0
+
+    - name: Install repository prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+        state: present
+        update_cache: true
+
+    - name: Create the apt keyring directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Fetch Docker official GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/debian/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Detect the system architecture
+      ansible.builtin.command: dpkg --print-architecture
+      changed_when: false
+      register: arch
+
+    - name: Add the Docker apt repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/docker.sources
+        mode: "0644"
+        content: |
+          Types: deb
+          URIs: https://download.docker.com/linux/debian
+          Suites: trixie
+          Components: stable
+          Architectures: {{ arch.stdout }}
+          Signed-By: /etc/apt/keyrings/docker.asc
+
+    - name: Install Docker Engine
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+    - name: Start and enable Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Install DOCKER-USER firewall script
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/pse-docker-user-rules
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          set -e
+          iptables -N DOCKER-USER 2>/dev/null || true
+          iptables -F DOCKER-USER
+          iptables -A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+          iptables -A DOCKER-USER -p tcp --dport 22 -j RETURN
+          iptables -A DOCKER-USER -s 172.16.0.0/12 -j RETURN
+          iptables -A DOCKER-USER ! -s 172.16.0.0/12 -j DROP
+
+    - name: Install DOCKER-USER systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/pse-docker-user-rules.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Restore DOCKER-USER firewall rules
+          After=docker.service
+          Requires=docker.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/usr/local/sbin/pse-docker-user-rules
+          ExecReload=/usr/local/sbin/pse-docker-user-rules
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable DOCKER-USER rules
+      ansible.builtin.systemd:
+        name: pse-docker-user-rules
+        daemon_reload: true
+        enabled: true
+        state: started
+
+    - name: Allow the pse user to run docker without sudo
+      ansible.builtin.user:
+        name: "{{ pse_user }}"
+        groups: docker
+        append: true
+
+    - name: Verify Docker works
+      ansible.builtin.command: docker run hello-world
+      changed_when: false
+      register: hello
