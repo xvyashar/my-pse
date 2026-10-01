@@ -1,5 +1,5 @@
 ---
-- name: Bootstrap PSE
+- name: Bootstrap
   hosts: pse
   become: true
   tags:
@@ -97,7 +97,7 @@
         - { directive: PasswordAuthentication, value: "no" }
       notify: Reload ssh
 
-- name: Manage PSE
+- name: Manage
   hosts: pse
   become: true
   gather_facts: false
