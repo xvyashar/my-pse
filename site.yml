@@ -5,10 +5,6 @@
   tags:
     - bootstrap
   vars_prompt:
-    - name: new_user
-      prompt: New username
-      default: pse
-      private: no
     - name: new_user_password
       prompt: New user password
       private: yes
@@ -37,7 +33,7 @@
 
     - name: Create sudo user
       ansible.builtin.user:
-        name: "{{ new_user }}"
+        name: "{{ pse_user }}"
         password: "{{ new_user_password | password_hash('sha512') }}"
         groups: sudo
         append: true
@@ -47,18 +43,18 @@
 
     - name: Ensure .ssh directory exists
       ansible.builtin.file:
-        path: "/home/{{ new_user }}/.ssh"
+        path: "/home/{{ pse_user }}/.ssh"
         state: directory
-        owner: "{{ new_user }}"
-        group: "{{ new_user }}"
+        owner: "{{ pse_user }}"
+        group: "{{ pse_user }}"
         mode: "0700"
 
     - name: Install control node public key for the new user
       ansible.builtin.blockinfile:
-        path: "/home/{{ new_user }}/.ssh/authorized_keys"
+        path: "/home/{{ pse_user }}/.ssh/authorized_keys"
         create: true
-        owner: "{{ new_user }}"
-        group: "{{ new_user }}"
+        owner: "{{ pse_user }}"
+        group: "{{ pse_user }}"
         mode: "0600"
         marker: "# {mark} ANSIBLE MANAGED PSE KEY"
         block: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub') }}"
@@ -67,7 +63,7 @@
     - name: Passwordless sudo for the automation user
       ansible.builtin.copy:
         dest: /etc/sudoers.d/pse-automation
-        content: "{{ new_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        content: "{{ pse_user }} ALL=(ALL) NOPASSWD:ALL\n"
         owner: root
         group: root
         mode: "0440"
@@ -106,7 +102,7 @@
   become: true
   gather_facts: false
   vars:
-    ansible_user: "{{ lookup('env', 'PSE_USER', default='pse') }}"
+    ansible_user: "{{ pse_user }}"
   tasks:
     - name: Prove key login and sudo both work
       ansible.builtin.command: whoami
