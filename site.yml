@@ -2,6 +2,8 @@
 - name: Bootstrap PSE
   hosts: pse
   become: true
+  tags:
+    - bootstrap
   vars_prompt:
     - name: new_user
       prompt: New username
@@ -42,10 +44,6 @@
         shell: /bin/bash
         create_home: true
       no_log: true
-
-    - name: Remember the new user for the next play
-      ansible.builtin.set_fact:
-        pse_user: "{{ new_user }}"
 
     - name: Ensure .ssh directory exists
       ansible.builtin.file:
@@ -108,7 +106,7 @@
   become: true
   gather_facts: false
   vars:
-    ansible_user: "{{ pse_user }}"
+    ansible_user: "{{ lookup('env', 'PSE_USER', default='pse') }}"
   tasks:
     - name: Prove key login and sudo both work
       ansible.builtin.command: whoami
