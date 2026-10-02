@@ -1,0 +1,24 @@
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx:/etc/nginx/conf.d:ro
+      - ./nginx/index.html:/usr/share/nginx/html/index.html:ro
+
+  9router:
+    image: decolua/9router:latest
+    container_name: 9router
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:20128:20128"
+    environment:
+      INITIAL_PASSWORD: "{{ nine_router_init_password }}"
+    volumes:
+      - 9router-data:/data
+
+volumes:
+  9router-data:

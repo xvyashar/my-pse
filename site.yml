@@ -234,6 +234,14 @@
     pse_domain: "{{ lookup('file', playbook_dir + '/domain.txt').strip() }}"
     services_dir: "/home/{{ pse_user }}/docker-services"
   tasks:
+    - name: Assert the 9router initial password is set
+      ansible.builtin.assert:
+        that:
+          - nine_router_init_password | default('') | length > 0
+        fail_msg: >-
+          nine_router_init_password is empty. Add it to secrets.ini under [pse:vars].
+      no_log: true
+
     - name: Assert the domain file is usable
       ansible.builtin.assert:
         that:
@@ -250,12 +258,13 @@
         mode: "0755"
 
     - name: Write the compose file
-      ansible.builtin.copy:
+      ansible.builtin.template:
         dest: "{{ services_dir }}/compose.yaml"
         owner: "{{ pse_user }}"
         group: "{{ pse_user }}"
-        mode: "0644"
-        src: files/compose.yaml
+        mode: "0600"
+        src: templates/compose.yaml
+      no_log: true
 
     - name: Write the nginx server config
       ansible.builtin.template:
@@ -307,3 +316,57 @@
         fail_msg: >-
           {{ pse_domain }} is not in the response body, so the vhost is not
           matching. Body: {{ landing.content | default('(none returned)', true) | truncate(200) }}
+
+- name: 9router
+  hosts: pse
+  become: true
+  gather_facts: false
+  vars:
+    ansible_user: "{{ pse_user }}"
+    pse_domain: "{{ lookup('file', playbook_dir + '/domain.txt').strip() }}"
+    services_dir: "/home/{{ pse_user }}/docker-services"
+    router_host: "9router.{{ pse_domain }}"
+  tasks:
+    - name: Write the nginx vhost for 9router
+      ansible.builtin.template:
+        dest: "{{ services_dir }}/nginx/9router.conf"
+        owner: "{{ pse_user }}"
+        group: "{{ pse_user }}"
+        mode: "0644"
+        src: templates/nginx/9router.conf
+
+    - name: Apply the stack
+      ansible.builtin.systemd:
+        name: pse-services
+        daemon_reload: true
+        state: restarted
+
+    - name: Confirm 9router is reachable from the host
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 20128
+        timeout: 60
+
+    - name: Validate nginx config and upstream resolution
+      ansible.builtin.command: docker compose exec -T nginx nginx -t
+      args:
+        chdir: "{{ services_dir }}"
+      changed_when: false
+
+    - name: Request the subdomain through nginx
+      ansible.builtin.uri:
+        url: http://127.0.0.1/
+        headers:
+          Host: "{{ router_host }}"
+        status_code: [200, 301, 302, 307, 308, 401, 403]
+        return_content: true
+      register: router_response
+
+    - name: Assert the subdomain routes to 9router
+      ansible.builtin.assert:
+        that:
+          - "'nginx started by ansible' not in router_response.content"
+        fail_msg: >-
+          {{ router_host }} fell through to the apex vhost, so the server_name
+          is not matching. Body: {{ router_response.content | default('(none)', true) | truncate(200) }}
+        success_msg: "{{ router_host }} routes to 9router, not the apex vhost."
