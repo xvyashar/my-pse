@@ -1,0 +1,13 @@
+[Unit]
+Description=Restore DOCKER-USER firewall rules
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/pse-docker-user-rules
+ExecReload=/usr/local/sbin/pse-docker-user-rules
+
+[Install]
+WantedBy=multi-user.target

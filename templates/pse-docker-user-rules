@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+iptables -N DOCKER-USER 2>/dev/null || true
+iptables -F DOCKER-USER
+iptables -A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+iptables -A DOCKER-USER -p tcp -m multiport --dports {{ docker_allowed_ports | join(',') }} -j RETURN
+iptables -A DOCKER-USER -s 172.16.0.0/12 -j RETURN
+iptables -A DOCKER-USER ! -s 172.16.0.0/12 -j DROP

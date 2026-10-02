@@ -98,6 +98,9 @@
   gather_facts: true
   vars:
     ansible_user: "{{ pse_user }}"
+    docker_allowed_ports:
+      - 22
+      - 80
   tasks:
     - name: Assert a supported distribution
       ansible.builtin.assert:
@@ -154,16 +157,10 @@
       register: arch
 
     - name: Add the Docker apt repository
-      ansible.builtin.copy:
+      ansible.builtin.template:
         dest: /etc/apt/sources.list.d/docker.sources
         mode: "0644"
-        content: |
-          Types: deb
-          URIs: https://download.docker.com/linux/{{ ansible_distribution | lower }}
-          Suites: {{ ansible_distribution_release }}
-          Components: stable
-          Architectures: {{ arch.stdout }}
-          Signed-By: /etc/apt/keyrings/docker.asc
+        src: templates/docker.sources
 
     - name: Install Docker Engine
       ansible.builtin.apt:
@@ -183,44 +180,39 @@
         enabled: true
 
     - name: Install DOCKER-USER firewall script
-      ansible.builtin.copy:
+      ansible.builtin.template:
         dest: /usr/local/sbin/pse-docker-user-rules
         mode: "0755"
-        content: |
-          #!/bin/sh
-          set -e
-          iptables -N DOCKER-USER 2>/dev/null || true
-          iptables -F DOCKER-USER
-          iptables -A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
-          iptables -A DOCKER-USER -p tcp --dport 22 -j RETURN
-          iptables -A DOCKER-USER -s 172.16.0.0/12 -j RETURN
-          iptables -A DOCKER-USER ! -s 172.16.0.0/12 -j DROP
+        src: templates/pse-docker-user-rules
 
     - name: Install DOCKER-USER systemd unit
       ansible.builtin.copy:
         dest: /etc/systemd/system/pse-docker-user-rules.service
         mode: "0644"
-        content: |
-          [Unit]
-          Description=Restore DOCKER-USER firewall rules
-          After=docker.service
-          Requires=docker.service
-
-          [Service]
-          Type=oneshot
-          RemainAfterExit=yes
-          ExecStart=/usr/local/sbin/pse-docker-user-rules
-          ExecReload=/usr/local/sbin/pse-docker-user-rules
-
-          [Install]
-          WantedBy=multi-user.target
+        src: files/pse-docker-user-rules.service
 
     - name: Enable DOCKER-USER rules
       ansible.builtin.systemd:
         name: pse-docker-user-rules
         daemon_reload: true
         enabled: true
-        state: started
+        state: restarted
+
+    - name: Read back the live firewall rules
+      ansible.builtin.command: iptables -S DOCKER-USER
+      register: live_rules
+      changed_when: false
+
+    - name: Assert the live rules match the configured ports
+      ansible.builtin.assert:
+        that:
+          - docker_allowed_ports | join(',') in live_rules.stdout
+          - "'-j DROP' in live_rules.stdout"
+        fail_msg: >-
+          DOCKER-USER does not reflect {{ docker_allowed_ports | join(',') }}.
+          The unit did not re-run, or the script failed part way through.
+          Live chain: {{ live_rules.stdout | default('(empty)', true) | replace('\n', ' / ') }}
+        success_msg: "DOCKER-USER permits {{ docker_allowed_ports | join(',') }} and drops the rest."
 
     - name: Allow the pse user to run docker without sudo
       ansible.builtin.user:
@@ -232,3 +224,86 @@
       ansible.builtin.command: docker run hello-world
       changed_when: false
       register: hello
+
+- name: Services
+  hosts: pse
+  become: true
+  gather_facts: false
+  vars:
+    ansible_user: "{{ pse_user }}"
+    pse_domain: "{{ lookup('file', playbook_dir + '/domain.txt').strip() }}"
+    services_dir: "/home/{{ pse_user }}/docker-services"
+  tasks:
+    - name: Assert the domain file is usable
+      ansible.builtin.assert:
+        that:
+          - pse_domain | length > 0
+          - "' ' not in pse_domain"
+        fail_msg: "domain.txt must hold a single bare domain, got '{{ pse_domain }}'"
+
+    - name: Create the services directory
+      ansible.builtin.file:
+        path: "{{ services_dir }}/nginx"
+        state: directory
+        owner: "{{ pse_user }}"
+        group: "{{ pse_user }}"
+        mode: "0755"
+
+    - name: Write the compose file
+      ansible.builtin.copy:
+        dest: "{{ services_dir }}/compose.yaml"
+        owner: "{{ pse_user }}"
+        group: "{{ pse_user }}"
+        mode: "0644"
+        src: files/compose.yaml
+
+    - name: Write the nginx server config
+      ansible.builtin.template:
+        dest: "{{ services_dir }}/nginx/default.conf"
+        owner: "{{ pse_user }}"
+        group: "{{ pse_user }}"
+        mode: "0644"
+        src: templates/nginx/default.conf
+
+    - name: Write the landing page
+      ansible.builtin.template:
+        dest: "{{ services_dir }}/nginx/index.html"
+        owner: "{{ pse_user }}"
+        group: "{{ pse_user }}"
+        mode: "0644"
+        src: templates/nginx/index.html
+
+    - name: Allow HTTP through ufw
+      ansible.builtin.command: ufw allow 80/tcp
+      register: ufw_http
+      changed_when: "'Rule added' in ufw_http.stdout"
+
+    - name: Install the services systemd unit
+      ansible.builtin.template:
+        dest: /etc/systemd/system/pse-services.service
+        mode: "0644"
+        src: templates/pse-services.service
+
+    - name: Enable the services at boot
+      ansible.builtin.systemd:
+        name: pse-services
+        daemon_reload: true
+        enabled: true
+        state: restarted
+
+    - name: Fetch the landing page
+      ansible.builtin.uri:
+        url: http://127.0.0.1/
+        headers:
+          Host: "{{ pse_domain }}"
+        status_code: 200
+        return_content: true
+      register: landing
+
+    - name: Assert the domain is being served
+      ansible.builtin.assert:
+        that:
+          - pse_domain in landing.content
+        fail_msg: >-
+          {{ pse_domain }} is not in the response body, so the vhost is not
+          matching. Body: {{ landing.content | default('(none returned)', true) | truncate(200) }}
